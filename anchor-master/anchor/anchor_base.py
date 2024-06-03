@@ -113,7 +113,7 @@ class AnchorBaseBeam(object):
     @staticmethod
     def make_tuples(previous_best, state):
         # alters state, computes support for new tuples
-        normalize_tuple = lambda x: tuple(sorted(set(x)))  # noqa
+        def normalize_tuple(x): return tuple(sorted(set(x)))  # noqa
         all_features = range(state['n_features'])
         coverage_data = state['coverage_data']
         current_idx = state['current_idx']
@@ -143,7 +143,8 @@ class AnchorBaseBeam(object):
                     continue
                 if new_t not in new_tuples:
                     new_tuples.add(new_t)
-                    state['t_order'][new_t] = copy.deepcopy(state['t_order'][t])
+                    state['t_order'][new_t] = copy.deepcopy(
+                        state['t_order'][t])
                     state['t_order'][new_t].append(f)
                     state['t_coverage_idx'][new_t] = (
                         state['t_coverage_idx'][t].intersection(
@@ -165,6 +166,7 @@ class AnchorBaseBeam(object):
     def get_sample_fns(sample_fn, tuples, state):
         # each sample fn returns number of positives
         sample_fns = []
+
         def complete_sample_fn(t, n):
             raw_data, data, labels = sample_fn(list(t), n)
             current_idx = state['current_idx']
@@ -172,9 +174,10 @@ class AnchorBaseBeam(object):
             idxs = range(current_idx, current_idx + n)
 
             if '<U' in str(raw_data.dtype):
-                # String types: make sure both string types are of maximum length 
+                # String types: make sure both string types are of maximum length
                 # to avoid string truncation. E.g., '<U308', '<U290' -> '<U308'
-                max_dtype = max(str(state['raw_data'].dtype), str(raw_data.dtype))
+                max_dtype = max(
+                    str(state['raw_data'].dtype), str(raw_data.dtype))
                 state['raw_data'] = state['raw_data'].astype(max_dtype)
                 raw_data = raw_data.astype(max_dtype)
 
@@ -207,7 +210,6 @@ class AnchorBaseBeam(object):
             sample_fns.append(lambda n, t=t: complete_sample_fn(t, n))
         return sample_fns
 
-
     @staticmethod
     def get_initial_statistics(tuples, state):
         stats = {
@@ -225,7 +227,7 @@ class AnchorBaseBeam(object):
         anchor = {'feature': [], 'mean': [], 'precision': [],
                   'coverage': [], 'examples': [], 'all_precision': 0}
         anchor['num_preds'] = state['data'].shape[0]
-        normalize_tuple = lambda x: tuple(sorted(set(x)))  # noqa
+        def normalize_tuple(x): return tuple(sorted(set(x)))  # noqa
         current_t = tuple()
         for f in state['t_order'][t]:
             current_t = normalize_tuple(current_t + (f,))
@@ -257,9 +259,42 @@ class AnchorBaseBeam(object):
                     verbose=False, epsilon_stop=0.05, min_samples_start=0,
                     max_anchor_size=None, verbose_every=1,
                     stop_on_first=False, coverage_samples=10000):
+        """
+        Args:
+            sample_fn: function that takes in a list of features and a number
+                of samples, and returns a tuple of raw data, data, and labels
+            delta: error of the anchor (probability of failure)
+            epsilon: error of the coverage (1 - coverage)
+            batch_size: batch size for sample function
+            min_shared_samples: minimum number of shared samples between
+                coverage and precision
+            desired_confidence: the desired confidence in the final anchor
+            beam_size: size of the beam in beam search
+            verbose: if True, print lots of information
+            epsilon_stop: if the best anchor has a score that is within
+                epsilon_stop of the next best anchor, stop
+            min_samples_start: minimum number of samples to start training
+            max_anchor_size: maximum size of the anchor
+            verbose_every: print verbose information every X iterations
+            stop_on_first: if True, stop when the first valid anchor is found
+            coverage_samples: number of samples to use to estimate coverage
+        Returns:
+            anchor: dictionary with anchor information
+        Purpose:
+            This function implements the anchor algorithm, which finds a small set of features
+            that can be used to explain the prediction of a black box model. The anchor algorithm
+            is based on the LUCB algorithm, which is a bandit algorithm that uses upper confidence
+            bounds to decide which arms to pull. The anchor algorithm uses the LUCB algorithm to
+            decide which features to add to the anchor at each step. The anchor algorithm is
+            guaranteed to find an anchor that has a precision within epsilon of the best anchor
+            with probability 1 - delta, and a coverage within epsilon of the best anchor with
+            probability 1 - delta. The anchor algorithm is also guaranteed to stop within a
+            finite number of iterations.
+        """
         anchor = {'feature': [], 'mean': [], 'precision': [],
                   'coverage': [], 'examples': [], 'all_precision': 0}
-        _, coverage_data, _ = sample_fn([], coverage_samples, compute_labels=False)
+        _, coverage_data, _ = sample_fn(
+            [], coverage_samples, compute_labels=False)
         raw_data, data, labels = sample_fn([], max(1, min_samples_start))
         mean = labels.mean()
         beta = np.log(1. / delta)
@@ -355,7 +390,8 @@ class AnchorBaseBeam(object):
                     ub = AnchorBaseBeam.dup_bernoulli(
                         mean, beta / state['t_nsamples'][t])
                 if verbose:
-                    print('%s mean = %.2f lb = %.2f ub = %.2f coverage: %.2f n: %d' % (t, mean, lb, ub, coverage, state['t_nsamples'][t]))
+                    print('%s mean = %.2f lb = %.2f ub = %.2f coverage: %.2f n: %d' % (
+                        t, mean, lb, ub, coverage, state['t_nsamples'][t]))
                 if mean >= desired_confidence and lb > desired_confidence - epsilon_stop:
                     if verbose:
                         print('Found eligible anchor ', t, 'Coverage:',

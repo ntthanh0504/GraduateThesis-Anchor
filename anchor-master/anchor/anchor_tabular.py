@@ -1,6 +1,9 @@
-from . import anchor_base
-from . import anchor_explanation
-from . import utils
+# from . import anchor_base
+import anchor_base
+import anchor_explanation
+import utils
+# from . import anchor_explanation
+# from . import utils
 import lime
 import lime.lime_tabular
 import collections
@@ -35,36 +38,34 @@ class AnchorTabularExplainer(object):
                  categorical_names={}, discretizer='quartile', encoder_fn=None):
         self.min = {}
         self.max = {}
-        self.disc = collections.namedtuple('random_name2',
-                                           ['discretize'])(lambda x: x)
-        self.encoder_fn = lambda x: x
-        if encoder_fn is not None:
-            self.encoder_fn = encoder_fn
-        self.categorical_features = []
+        self.disc = collections.namedtuple(
+            'random_name2', ['discretize'])(lambda x: x)
+        self.encoder_fn = encoder_fn if encoder_fn is not None else lambda x: x
+        self.categorical_feature_indices = []
         self.feature_names = feature_names
         self.train = train_data
         self.class_names = class_names
         self.categorical_names = copy.deepcopy(categorical_names)
         if categorical_names:
-            self.categorical_features = sorted(categorical_names.keys())
+            self.categorical_feature_indices = sorted(categorical_names.keys())
 
         if discretizer == 'quartile':
             self.disc = lime.lime_tabular.QuartileDiscretizer(train_data,
-                                                              self.categorical_features,
+                                                              self.categorical_feature_indices,
                                                               self.feature_names)
         elif discretizer == 'decile':
             self.disc = lime.lime_tabular.DecileDiscretizer(train_data,
-                                                            self.categorical_features,
+                                                            self.categorical_feature_indices,
                                                             self.feature_names)
         else:
             raise ValueError('Discretizer must be quartile or decile')
 
-        self.ordinal_features = [x for x in range(
-            len(feature_names)) if x not in self.categorical_features]
+        self.ordinal_feature_indices = [x for x in range(
+            len(feature_names)) if x not in self.categorical_feature_indices]
 
         self.d_train = self.disc.discretize(self.train)
         self.categorical_names.update(self.disc.names)
-        self.categorical_features += self.ordinal_features
+        self.categorical_feature_indices += self.ordinal_feature_indices
 
         for f in range(train_data.shape[1]):
             self.min[f] = np.min(train_data[:, f])
@@ -127,7 +128,7 @@ class AnchorTabularExplainer(object):
         examples = self.disc.discretize(examples)
         for ex in examples:
             values = [self.categorical_names[i][int(ex[i])]
-                      if i in self.categorical_features
+                      if i in self.categorical_feature_indices
                       else ex[i] for i in range(ex.shape[0])]
             ret_obj.append(list(zip(self.feature_names, values, weights)))
         return ret_obj
@@ -164,7 +165,7 @@ class AnchorTabularExplainer(object):
         weights = [-1 for x in range(instance.shape[0])]
         instance = self.disc.discretize(exp['instance'].reshape(1, -1))[0]
         values = [self.categorical_names[i][int(instance[i])]
-                  if i in self.categorical_features
+                  if i in self.categorical_feature_indices
                   else instance[i] for i in range(instance.shape[0])]
         raw_data = list(zip(self.feature_names, values, weights))
         ret = {
@@ -207,27 +208,35 @@ class AnchorTabularExplainer(object):
         return out
 
     def get_sample_fn(self, data_row, classifier_fn, desired_label=None):
-        def predict_fn(x):
-            return classifier_fn(self.encoder_fn(x))
-        true_label = desired_label
-        if true_label is None:
-            true_label = predict_fn(data_row.reshape(1, -1))[0]
-        # must map present here to include categorical features (for conditions_eq), and numerical features for geq and leq
+        """
+        Args:
+            data_row: 1d numpy array, corresponding to a row in the training data
+            classifier_fn: a callable that takes a 2D numpy array and outputs
+                prediction probabilities. For ScikitClassifiers, this is simply the `predict` method.
+            desired_label: int, the desired label to be explained
+        Returns: a callable that samples the neighborhood of a data instance
+        Purpose: This function returns a callable that samples the neighborhood of a data instance
+        """
         mapping = {}
         data_row = self.disc.discretize(data_row.reshape(1, -1))[0]
-        for f in self.categorical_features:
-            if f in self.ordinal_features:
-                for v in range(len(self.categorical_names[f])):
+        true_label = desired_label if desired_label is not None else classifier_fn(
+            self.encoder_fn(data_row.reshape(1, -1)))[0]
+
+        # must map present here to include categorical features (for conditions_eq), and numerical features for geq and leq
+        # compare value of each feature in data_row to each value in categorical_names[feature_index]
+        for feature_index in self.categorical_feature_indices:
+            if feature_index in self.ordinal_feature_indices:
+                for value_index in range(len(self.categorical_names[feature_index])):
                     idx = len(mapping)
-                    if data_row[f] <= v and v != len(self.categorical_names[f]) - 1:
-                        mapping[idx] = (f, 'leq', v)
+                    if data_row[feature_index] <= value_index and value_index != len(self.categorical_names[feature_index]) - 1:
+                        mapping[idx] = (feature_index, 'leq', value_index)
                         # names[idx] = '%s <= %s' % (self.feature_names[f], v)
-                    elif data_row[f] > v:
-                        mapping[idx] = (f, 'geq', v)
+                    elif data_row[feature_index] > value_index:
+                        mapping[idx] = (feature_index, 'geq', value_index)
                         # names[idx] = '%s > %s' % (self.feature_names[f], v)
             else:
                 idx = len(mapping)
-                mapping[idx] = (f, 'eq', data_row[f])
+                mapping[idx] = (feature_index, 'eq', data_row[feature_index])
             # names[idx] = '%s = %s' % (
             #     self.feature_names[f],
             #     self.categorical_names[f][int(data_row[f])])
@@ -264,7 +273,8 @@ class AnchorTabularExplainer(object):
             # data = (raw_data == data_row).astype(int)
             labels = []
             if compute_labels:
-                labels = (predict_fn(raw_data) == true_label).astype(int)
+                labels = (classifier_fn(self.encoder_fn(raw_data))
+                          == true_label).astype(int)
             return raw_data, data, labels
         return sample_fn, mapping
 
@@ -273,6 +283,23 @@ class AnchorTabularExplainer(object):
                          max_anchor_size=None,
                          desired_label=None,
                          beam_size=4, **kwargs):
+        """
+        Args:
+            data_row: 1d numpy array, corresponding to a row in the training data
+            classifier_fn: a callable that takes a 2D numpy array and outputs
+                prediction probabilities. For ScikitClassifiers, this is simply the `predict` method.
+            threshold: float, minimum coverage of the anchor
+            delta: float, error tolerance of the beam search
+            tau: float, the desired precision of the anchor
+            batch_size: int, batch size for the anchor generation
+            max_anchor_size: int, maximum size of the anchor
+            desired_label: int, the desired label to be explained
+            beam_size: int, size of the beam for the anchor search
+            **kwargs: additional arguments to be passed to the anchor search
+        Returns: An AnchorExplanation object
+        Purpose: Explains a prediction made by the classifier
+        """
+
         # It's possible to pass in max_anchor_size
         sample_fn, mapping = self.get_sample_fn(
             data_row, classifier_fn, desired_label=desired_label)
@@ -349,3 +376,40 @@ class AnchorTabularExplainer(object):
                     fname = '%s > %s' % (self.feature_names[f], geq_val)
                 handled.add(f)
             hoeffding_exp['names'].append(fname)
+
+
+if __name__ == '__main__':
+    dataset_folder = './anchor-master/anchor-experiments-master/datasets'
+    dataset = utils.load_dataset(
+        'adult', balance=True, dataset_folder=dataset_folder, discretize=True)
+
+    from sklearn.preprocessing import OneHotEncoder
+    encoder = OneHotEncoder()
+    encoder.fit(dataset.train)
+
+    from sklearn.ensemble import RandomForestClassifier
+
+    c = sklearn.ensemble.RandomForestClassifier(n_estimators=50, n_jobs=5)
+    c.fit(encoder.transform(dataset.train), dataset.labels_train)
+    def predict_fn(x): return c.predict(encoder.transform(x))
+    print('Train', sklearn.metrics.accuracy_score(
+        dataset.labels_train, predict_fn(dataset.train)))
+    print('Test', sklearn.metrics.accuracy_score(
+        dataset.labels_test, predict_fn(dataset.test)))
+
+    explainer = AnchorTabularExplainer(
+        dataset.class_names,
+        dataset.feature_names,
+        dataset.train,
+        dataset.categorical_names)
+
+    idx = 0
+    np.random.seed(1)
+    print('Prediction: ', explainer.class_names[predict_fn(
+        dataset.test[idx].reshape(1, -1))[0]])
+    exp = explainer.explain_instance(
+        dataset.test[idx], predict_fn, threshold=0.95)
+    
+    print('Anchor: %s' % (' AND '.join(exp.names())))
+    print('Precision: %.2f' % exp.precision())
+    print('Coverage: %.2f' % exp.coverage())
